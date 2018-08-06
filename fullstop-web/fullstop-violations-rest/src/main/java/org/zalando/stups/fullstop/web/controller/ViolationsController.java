@@ -10,18 +10,24 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.zalando.stups.fullstop.teams.Account;
 import org.zalando.stups.fullstop.teams.TeamOperations;
+import org.zalando.stups.fullstop.violation.ViolationSink;
 import org.zalando.stups.fullstop.violation.entity.ViolationEntity;
 import org.zalando.stups.fullstop.violation.service.ViolationService;
 import org.zalando.stups.fullstop.web.api.ForbiddenException;
 import org.zalando.stups.fullstop.web.api.NotFoundException;
+import org.zalando.stups.fullstop.web.model.CreateViolation;
 import org.zalando.stups.fullstop.web.model.Violation;
 import springfox.documentation.annotations.ApiIgnore;
 
+import javax.validation.Valid;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 import static com.google.common.collect.Lists.newArrayList;
@@ -37,6 +43,8 @@ import static org.springframework.web.bind.annotation.RequestMethod.POST;
 @RequestMapping(value = "/api/violations", produces = APPLICATION_JSON_VALUE)
 @Api(value = "/api/violations", description = "the violations API")
 public class ViolationsController {
+    @Autowired
+    private ViolationSink violationSink;
 
     @Autowired
     private ViolationService violationService;
@@ -114,7 +122,7 @@ public class ViolationsController {
             final String type,
             @ApiParam(value = "Include only violations with a certain types")
             @RequestParam(value = "types", required = false)
-            List<String> types,
+            final List<String> types,
             @ApiParam(value = "Include only violations with a certain application name")
             @RequestParam(value = "application-ids", required = false)
             final List<String> applicationIds,
@@ -128,23 +136,26 @@ public class ViolationsController {
             @PageableDefault(page = 0, size = 10, sort = "id", direction = ASC) final Pageable pageable) throws NotFoundException {
 
         if (from == null) {
-            from = DateTime.now().minusWeeks(1);
+            from = new DateTime(0);
         }
 
         if (to == null) {
             to = DateTime.now();
         }
 
+        final List<String> allTypes = newArrayList();
         if (types != null && !types.isEmpty()) {
-            types.add(type);
-        } else if (type != null) {
-            types = newArrayList(type);
+            types.stream().filter(Objects::nonNull).forEach(allTypes::add);
+        }
+
+        if (type != null) {
+            allTypes.add(type);
         }
 
         return mapBackendToFrontendViolations(
                 violationService.queryViolations(
                         accounts, from, to, lastViolation,
-                        checked, severity, priority, auditRelevant, types, whitelisted, applicationIds, applicationVersionIds, pageable));
+                        checked, severity, priority, auditRelevant, allTypes, whitelisted, applicationIds, applicationVersionIds, pageable));
     }
 
     @ApiOperation(
@@ -176,6 +187,15 @@ public class ViolationsController {
         violation.setComment(comment);
         final ViolationEntity dbViolationEntity = violationService.save(violation);
         return entityToDto.convert(dbViolationEntity);
+    }
+
+    @ApiResponse(code = 202, message = "Violation successfully accepted!")
+    @ResponseStatus(code = HttpStatus.ACCEPTED)
+    @PostMapping(consumes = APPLICATION_JSON_VALUE)
+    @PreAuthorize("#oauth2.hasScope('fullstop.violation.write')")
+    public void createViolation(@Valid @RequestBody CreateViolation violation)
+    {
+        violationSink.put(violation);
     }
 
     private boolean hasAccessToAccount(final String userId, final String targetAccountId) {

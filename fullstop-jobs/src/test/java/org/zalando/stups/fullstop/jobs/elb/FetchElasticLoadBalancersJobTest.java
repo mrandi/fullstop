@@ -4,10 +4,14 @@ import com.amazonaws.regions.Region;
 import com.amazonaws.services.elasticloadbalancing.AmazonElasticLoadBalancingClient;
 import com.amazonaws.services.elasticloadbalancing.model.DescribeLoadBalancersRequest;
 import com.amazonaws.services.elasticloadbalancing.model.DescribeLoadBalancersResult;
+import com.amazonaws.services.elasticloadbalancing.model.DescribeTagsRequest;
+import com.amazonaws.services.elasticloadbalancing.model.DescribeTagsResult;
 import com.amazonaws.services.elasticloadbalancing.model.Instance;
 import com.amazonaws.services.elasticloadbalancing.model.Listener;
 import com.amazonaws.services.elasticloadbalancing.model.ListenerDescription;
 import com.amazonaws.services.elasticloadbalancing.model.LoadBalancerDescription;
+import com.amazonaws.services.elasticloadbalancing.model.Tag;
+import com.amazonaws.services.elasticloadbalancing.model.TagDescription;
 import com.google.common.collect.ImmutableMap;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.junit.After;
@@ -22,9 +26,11 @@ import org.zalando.stups.fullstop.jobs.common.FetchTaupageYaml;
 import org.zalando.stups.fullstop.jobs.common.PortsChecker;
 import org.zalando.stups.fullstop.jobs.common.SecurityGroupsChecker;
 import org.zalando.stups.fullstop.jobs.config.JobsProperties;
+import org.zalando.stups.fullstop.jobs.exception.JobExceptionHandler;
 import org.zalando.stups.fullstop.violation.ViolationSink;
 import org.zalando.stups.fullstop.violation.service.ViolationService;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -34,20 +40,22 @@ import static com.amazonaws.regions.Regions.fromName;
 import static com.google.common.collect.Lists.newArrayList;
 import static com.google.common.collect.Sets.newHashSet;
 import static java.util.Arrays.asList;
+import static java.util.Collections.emptyMap;
 import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.anyListOf;
 import static org.mockito.Mockito.anyString;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 public class FetchElasticLoadBalancersJobTest {
 
-    public static final String ACCOUNT_ID = "1";
-    public static final String REGION1 = "eu-west-1";
+    private static final String ACCOUNT_ID = "1";
+    private static final String REGION1 = "eu-west-1";
     private ViolationSink violationSinkMock;
 
     private ClientProvider clientProviderMock;
@@ -59,6 +67,8 @@ public class FetchElasticLoadBalancersJobTest {
     private AmazonElasticLoadBalancingClient mockAwsELBClient;
 
     private DescribeLoadBalancersResult mockDescribeELBResult;
+
+    private DescribeTagsResult mockDescribeTagsResult;
 
     private PortsChecker portsChecker;
 
@@ -96,18 +106,49 @@ public class FetchElasticLoadBalancersJobTest {
         final ListenerDescription listenerDescription = new ListenerDescription();
         listenerDescription.setListener(listener);
 
+        final ArrayList<LoadBalancerDescription> elbs = newArrayList();
+        final ArrayList<TagDescription> tagDescriptions = newArrayList();
+
         final LoadBalancerDescription publicELB = new LoadBalancerDescription();
         publicELB.setScheme("internet-facing");
         publicELB.setListenerDescriptions(newArrayList(listenerDescription));
         publicELB.setCanonicalHostedZoneName("test.com");
         publicELB.setInstances(asList(new Instance("i1"), new Instance("i2")));
+        publicELB.setLoadBalancerName("publicELB");
+        elbs.add(publicELB);
+        tagDescriptions.add(
+                new TagDescription()
+                        .withLoadBalancerName("publicELB")
+                        .withTags(newArrayList(
+                                new Tag().withKey("someTag").withValue("someValue"))));
 
         final LoadBalancerDescription privateELB = new LoadBalancerDescription();
         privateELB.setScheme("internal");
         privateELB.setCanonicalHostedZoneName("internal.org");
+        privateELB.setLoadBalancerName("privateELB");
+        elbs.add(privateELB);
+
+        for (int i = 1; i <= 20; i++) {
+            final String loadBalancerName = "kubeELB" + i;
+            final LoadBalancerDescription kubeELB = new LoadBalancerDescription();
+            kubeELB.setScheme("internet-facing");
+            kubeELB.setCanonicalHostedZoneName("test" + i + ".com");
+            kubeELB.setLoadBalancerName(loadBalancerName);
+            elbs.add(kubeELB);
+
+            tagDescriptions.add(
+                    new TagDescription()
+                            .withLoadBalancerName(loadBalancerName)
+                            .withTags(newArrayList(
+                                    new Tag().withKey("someTag").withValue("someValue"),
+                                    new Tag().withKey("kubernetes.io/cluster/").withValue("owned"))));
+        }
 
         mockDescribeELBResult = new DescribeLoadBalancersResult();
-        mockDescribeELBResult.setLoadBalancerDescriptions(newArrayList(publicELB, privateELB));
+        mockDescribeELBResult.setLoadBalancerDescriptions(elbs);
+
+        mockDescribeTagsResult = new DescribeTagsResult();
+        mockDescribeTagsResult.setTagDescriptions(tagDescriptions);
 
         regions.add(REGION1);
 
@@ -123,8 +164,9 @@ public class FetchElasticLoadBalancersJobTest {
         when(accountIdSupplierMock.get()).thenReturn(newHashSet(ACCOUNT_ID));
         when(jobsPropertiesMock.getWhitelistedRegions()).thenReturn(regions);
         when(portsChecker.check(any(LoadBalancerDescription.class))).thenReturn(Collections.<Integer>emptyList());
-        when(securityGroupsChecker.check(any(), any(), any())).thenReturn(Collections.<String>emptySet());
+        when(securityGroupsChecker.check(any(), any(), any())).thenReturn(emptyMap());
         when(mockAwsELBClient.describeLoadBalancers(any(DescribeLoadBalancersRequest.class))).thenReturn(mockDescribeELBResult);
+        when(mockAwsELBClient.describeTags(any(DescribeTagsRequest.class))).thenReturn(mockDescribeTagsResult);
         when(mockAwsApplications.isPubliclyAccessible(anyString(), anyString(), anyListOf(String.class)))
                 .thenReturn(Optional.of(false));
 
@@ -140,7 +182,8 @@ public class FetchElasticLoadBalancersJobTest {
                 fetchTaupageYamlMock,
                 mockAmiDetailsProvider,
                 mockEC2InstanceProvider,
-                mock(CloseableHttpClient.class));
+                mock(CloseableHttpClient.class),
+                mock(JobExceptionHandler.class));
 
         fetchELBJob.run();
 
@@ -150,6 +193,8 @@ public class FetchElasticLoadBalancersJobTest {
         verify(securityGroupsChecker, atLeast(1)).check(any(), any(), any());
         verify(portsChecker, atLeast(1)).check(any());
         verify(mockAwsELBClient).describeLoadBalancers(any(DescribeLoadBalancersRequest.class));
+        // maximum 20 ELB names can be requested at once. So this needs to be split into two calls.
+        verify(mockAwsELBClient, times(2)).describeTags(any(DescribeTagsRequest.class));
         verify(clientProviderMock).getClient(any(), any(String.class), any(Region.class));
         verify(mockAwsApplications).isPubliclyAccessible(eq(ACCOUNT_ID), eq(REGION1), eq(asList("i1", "i2")));
         verify(mockEC2InstanceProvider).getById(eq(ACCOUNT_ID), eq(getRegion(fromName(REGION1))), eq("i1"));

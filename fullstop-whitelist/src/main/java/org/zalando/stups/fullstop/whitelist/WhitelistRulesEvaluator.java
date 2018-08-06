@@ -1,5 +1,10 @@
 package org.zalando.stups.fullstop.whitelist;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jayway.jsonpath.JsonPath;
+import com.jayway.jsonpath.JsonPathException;
+import org.slf4j.Logger;
 import org.zalando.stups.fullstop.rule.entity.RuleEntity;
 import org.zalando.stups.fullstop.violation.entity.ApplicationEntity;
 import org.zalando.stups.fullstop.violation.entity.VersionEntity;
@@ -12,9 +17,12 @@ import java.util.function.BiFunction;
 import java.util.function.Predicate;
 
 import static com.google.common.collect.Lists.newArrayList;
+import static org.slf4j.LoggerFactory.getLogger;
 
 public class WhitelistRulesEvaluator implements BiFunction<RuleEntity, ViolationEntity, Boolean> {
 
+    private final Logger log = getLogger(getClass());
+    private final ObjectMapper om = new ObjectMapper();
 
     /**
      * true if rule matches a violation and should be whitelisted.
@@ -54,6 +62,10 @@ public class WhitelistRulesEvaluator implements BiFunction<RuleEntity, Violation
                 .map(WhitelistRulesEvaluator::applicationVersionIsEqual)
                 .ifPresent(predicates::add);
 
+        trimOptional(ruleEntity.getMetaInfoJsonPath())
+                .map(this::metaInfoJsonPathExists)
+                .ifPresent(predicates::add);
+
         final Optional<Predicate<ViolationEntity>> whiteListTest = predicates.stream().reduce(Predicate::and);
 
         return whiteListTest.isPresent() && whiteListTest.get().test(violationEntity);
@@ -73,12 +85,13 @@ public class WhitelistRulesEvaluator implements BiFunction<RuleEntity, Violation
 
     private static Predicate<ViolationEntity> imageNameMatches(final String imageNamePattern) {
         return v -> {
-            if(v.getMetaInfo() instanceof Map) {
-                final Map<String,String> map = (Map<String, String>) v.getMetaInfo();
+            if (v.getMetaInfo() instanceof Map) {
+                final Map map = (Map) v.getMetaInfo();
                 if (map == null || map.get("ami_name") == null) {
                     return false;
                 }
-                return map.get("ami_name").matches(imageNamePattern);
+                final String amiName = (String) map.get("ami_name");
+                return amiName.matches(imageNamePattern);
             } else {
                 return false;
             }
@@ -87,9 +100,10 @@ public class WhitelistRulesEvaluator implements BiFunction<RuleEntity, Violation
 
     private static Predicate<ViolationEntity> imageOwnerIsEqual(final String imageOwner) {
         return v -> {
-            if(v.getMetaInfo() instanceof Map) {
-                final Map<String,String> map = (Map<String, String>) v.getMetaInfo();
-                return imageOwner.equals(map.get("ami_owner_id"));
+            if (v.getMetaInfo() instanceof Map) {
+                final Map map = (Map) v.getMetaInfo();
+                final String amiOwnerId = (String) map.get("ami_owner_id");
+                return imageOwner.equals(amiOwnerId);
             } else {
                 return false;
             }
@@ -112,6 +126,24 @@ public class WhitelistRulesEvaluator implements BiFunction<RuleEntity, Violation
                         orElse(null));
     }
 
+    private Predicate<ViolationEntity> metaInfoJsonPathExists(final String jsonPathDefinition) {
+        return v -> {
+            final JsonPath jsonPath = JsonPath.compile(jsonPathDefinition);
+            final String json;
+            try {
+                json = om.writeValueAsString(v.getMetaInfo());
+            } catch (JsonProcessingException e) {
+                log.warn("Could not read violation metaInfo as JSON: " + v, e);
+                return false;
+            }
+            try {
+                final List<?> matches = jsonPath.read(json);
+                return !matches.isEmpty();
+            } catch (JsonPathException e) {
+                return false;
+            }
+        };
+    }
 
     private static Optional<String> trimOptional(final String value) {
         return Optional.ofNullable(value).map(String::trim).filter(string -> !string.isEmpty());

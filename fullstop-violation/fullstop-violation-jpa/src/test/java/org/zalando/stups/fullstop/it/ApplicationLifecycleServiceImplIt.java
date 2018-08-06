@@ -5,13 +5,13 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.SpringApplicationConfiguration;
+import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
-import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
-import org.zalando.stups.fullstop.violation.EmbeddedPostgresJpaConfig;
+import org.springframework.test.context.junit4.SpringRunner;
+import org.zalando.stups.fullstop.violation.JpaConfig;
 import org.zalando.stups.fullstop.violation.entity.ApplicationEntity;
 import org.zalando.stups.fullstop.violation.entity.LifecycleEntity;
 import org.zalando.stups.fullstop.violation.entity.VersionEntity;
@@ -24,8 +24,8 @@ import javax.transaction.Transactional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.joda.time.DateTime.now;
 
-@RunWith(SpringJUnit4ClassRunner.class)
-@SpringApplicationConfiguration(classes = ApplicationLifecycleServiceImplIt.TestConfig.class)
+@RunWith(SpringRunner.class)
+@SpringBootTest(classes = ApplicationLifecycleServiceImplIt.TestConfig.class)
 @Transactional
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD) // Makes test slower
 public class ApplicationLifecycleServiceImplIt {
@@ -34,8 +34,8 @@ public class ApplicationLifecycleServiceImplIt {
     private static final String REGION = "eu-west-1";
     private static final String INSTANCE_ID = "i1";
     private static final DateTime INSTANCE_BOOT_TIME = now();
-    public static final String RUN_INSTANCES = "RunInstances";
-    public static final String TERMINATE_INSTANCES = "TerminateInstances";
+    private static final String RUN_INSTANCES = "RunInstances";
+    private static final String TERMINATE_INSTANCES = "TerminateInstances";
 
     @Autowired
     private ApplicationLifecycleService applicationLifecycleService;
@@ -54,7 +54,7 @@ public class ApplicationLifecycleServiceImplIt {
     }
 
     @Test
-    public void testNoOverwriteSame() throws Exception {
+    public void testNoOverwriteSame() {
         final LifecycleEntity taupgelifecycleEntity = new LifecycleEntity();
         taupgelifecycleEntity.setInstanceId(INSTANCE_ID);
         taupgelifecycleEntity.setAccountId(ACCOUNT_ID);
@@ -81,7 +81,7 @@ public class ApplicationLifecycleServiceImplIt {
     }
 
     @Test
-    public void testNoOverwriteDifferent() throws Exception {
+    public void testNoOverwriteDifferent() {
         final LifecycleEntity taupgelifecycleEntity = new LifecycleEntity();
         taupgelifecycleEntity.setInstanceId("97987");
         taupgelifecycleEntity.setAccountId(ACCOUNT_ID);
@@ -109,7 +109,7 @@ public class ApplicationLifecycleServiceImplIt {
 
 
     @Configuration
-    @Import(EmbeddedPostgresJpaConfig.class)
+    @Import(JpaConfig.class)
     static class TestConfig {
         @Bean
         ApplicationLifecycleService applicationLifecycleService() {

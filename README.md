@@ -7,12 +7,12 @@
 
 ![swagger-validator](http://online.swagger.io/validator/?url=https://raw.githubusercontent.com/zalando-stups/fullstop/master/fullstop-api.yaml)
 
-#Fullstop - Audit reporting
+# Fullstop - Audit reporting
 
 
-###Fullstop AWS overview
+### Fullstop AWS overview
 ![Fullstop](images/fullstop.png)
-###Fullstop Architecture overview
+### Fullstop Architecture overview
 ![Fullstop Architecture](images/fullstop-architecture.png)
 
 Aim of the project is to enrich CloudTrail log events.
@@ -34,39 +34,40 @@ by all other accounts in order to perform this operations.
 
 ![Fullstop-Cross-Account-Role](images/fullstop-cross-account-role.png)
 
-##Plugins
+## Plugins
 
 * [fullstop-ami-plugin](fullstop-plugins/fullstop-ami-plugin)
-* [fullstop-application-lifecycle-plugin] (fullstop-plugins/fullstop-application-lifecycle-plugin)
-* [fullstop-application-masterdata-plugin] (fullstop-plugins/fullstop-application-masterdata-plugin)
-* [fullstop-count-events-plugin] (fullstop-plugins/fullstop-count-events-plugin)
+* [fullstop-application-lifecycle-plugin](fullstop-plugins/fullstop-application-lifecycle-plugin)
 * [fullstop-hello-event-plugin](fullstop-plugins/fullstop-hello-event-plugin)
 * [fullstop-keypair-plugin](fullstop-plugins/fullstop-keypair-plugin)
 * [fullstop-region-plugin](fullstop-plugins/fullstop-region-plugin)
 * [fullstop-registry-plugin](fullstop-plugins/fullstop-registry-plugin)
 * [fullstop-save-security-group-plugin](fullstop-plugins/fullstop-save-security-group-plugin)
-* [fullstop-scm-repository-plugin] (fullstop-plugins/fullstop-scm-repository-plugin)
-* [fullstop-snapshot-source-plugin] (fullstop-plugins/fullstop-snapshot-source-plugin)
+* [fullstop-scm-repository-plugin](fullstop-plugins/fullstop-scm-repository-plugin)
+* [fullstop-snapshot-source-plugin](fullstop-plugins/fullstop-snapshot-source-plugin)
 * [fullstop-subnet-plugin](fullstop-plugins/fullstop-subnet-plugin)
-* [fullstop-taupage-yaml-plugin] (fullstop-plugins/fullstop-taupage-yaml-plugin)
-* [fullstop-unapproved-services-and-role-plugin] (fullstop-plugins/fullstop-unapproved-services-and-role-plugin)
+* [fullstop-taupage-yaml-plugin](fullstop-plugins/fullstop-taupage-yaml-plugin)
+* [fullstop-unapproved-services-and-role-plugin](fullstop-plugins/fullstop-unapproved-services-and-role-plugin)
+* [fullstop-lambda-plugin](fullstop-plugins/fullstop-lambda-plugin)
 
-##Jobs
+## Jobs
 
 In addition to listening on cloudtrail events, Fullstop. runs jobs as well. A list of jobs can be
 found [here](fullstop-jobs).
 
-##Application lifecycle
+## Application lifecycle
+
 Fullstop. also keeps record of your application lifecycles. for more information, see the
 [fullstop-application-lifecycle-plugin] (fullstop-plugins/fullstop-application-lifecycle-plugin) and the
 [Application lifecycle API](fullstop-web/fullstop-lifecycle-api)
 
-##Information sources
+## Information sources
 
 Fullstop uses different source to gather information.
 
 ![information-sources](docs/information_sources.png)
-##Configuration
+
+## Configuration
 
 This environment variables should be set:
 
@@ -78,9 +79,8 @@ This environment variables should be set:
     FULLSTOP_TAUPAGE_NAME_PREFIX
     FULLSTOP_S3_BUCKET
     FULLSTOP_KIO_URL
-    FULLSTOP_PIERONE_URL
+    FULLSTOP_PIERONE_URLS
     FULLSTOP_TEAM_SERVICE_URL
-    FULLSTOP_KONTROLLETTI_URL
     DATABASE_URL
     DATABASE_USER
     DATABASE_PASSWORD
@@ -102,9 +102,8 @@ Example:
     $ export FULLSTOP_TAUPAGE_NAME_PREFIX=Taupage
     $ export FULLSTOP_S3_BUCKET=fullstop-bucket
     $ export FULLSTOP_KIO_URL: https://application.registry.address
-    $ export FULLSTOP_PIERONE_URL: https://docker.repository.address
+    $ export FULLSTOP_PIERONE_URLS: https://docker.repository.address
     $ export FULLSTOP_TEAM_SERVICE_URL: https://team.service.address
-    $ export FULLSTOP_KONTROLLETTI_URL: https://kontrolletti.address
     $ export DATABASE_URL='jdbc:postgresql://localhost:5432/fullstop'
     $ export DATABASE_USER=postgres
     $ export DATABASE_PASSWORD='{cipher}234laksnfdlF83NHALF'
@@ -121,7 +120,14 @@ Example:
 Set the parameter `fullstop.container.autoStart=false` either as program argument, or as system property to start
 Fullstop without CloudTrail processing.
 
-##Database setup
+### Scopes
+In order to create violations and save them to the database,
+your application which is responsible for that, needs this oAuth2 scope
+for the POST method on "/api/violations" endpoint
+> fullstop.violation.write
+
+## Database setup
+
 Fullstop will store the violations in a RDBMS. Once you start Fullstop, it will create the necessary schema and tables
 for you. The database itself, however, has to be created by you.
 Your database password is encrypted with [AWS KMS](https://docs.aws.amazon.com/kms/latest/developerguide/overview.html).
@@ -133,7 +139,7 @@ The password should be already encrypted, when you store it in the ```DATABASE_P
 encrypted password always starts with ```aws:kms:```. You can use our [CLI tool](https://github.com/zalando/spring-cloud-config-aws-kms/tree/master/encryption-cli)
 for encryption or you use Amazons [AWS CLI](http://docs.aws.amazon.com/cli/latest/reference/kms/encrypt.html#examples).
 
-##Propose API changes
+## Propose API changes
 
 **Important** all changes should be swagger 2.0 spec compliant.
 
@@ -141,11 +147,17 @@ for encryption or you use Amazons [AWS CLI](http://docs.aws.amazon.com/cli/lates
 * Copy your changes and paste it in the [Github web editor: fullstop-api.yaml](https://github.com/zalando-stups/fullstop/edit/master/fullstop-api.yaml).
 * Create a pull request with the new swagger 2.0 spec.
 
-##How to build
+## How to build
 
-    $ mvn clean install
+Needs Java 1.8. Newer jdks are not supported yet.
 
-##How to run
+    $ ./mvnw clean install
+    
+## Run entire test suite (requires a local docker environment)
+
+    $ ./mvnw clean verify -Pintegration-test
+
+## How to run
 
 You need a locally running PostgreSQL 9.4 server (database "fullstop", host "localhost", user "postgres", password "postgres").
 
@@ -153,7 +165,7 @@ You need a locally running PostgreSQL 9.4 server (database "fullstop", host "loc
     $ cd fullstop
     $ mvn spring-boot:run -Dfullstop.container.autoStart=false
 
-##How to build a docker image
+## How to build a docker image
 
 Build fullstop:
 

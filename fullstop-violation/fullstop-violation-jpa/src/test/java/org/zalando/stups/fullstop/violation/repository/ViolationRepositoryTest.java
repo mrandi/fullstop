@@ -5,13 +5,13 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.SpringApplicationConfiguration;
+import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
+import org.springframework.test.context.junit4.SpringRunner;
 import org.zalando.stups.fullstop.rule.entity.RuleEntity;
 import org.zalando.stups.fullstop.rule.repository.RuleEntityRepository;
-import org.zalando.stups.fullstop.violation.EmbeddedPostgresJpaConfig;
+import org.zalando.stups.fullstop.violation.JpaConfig;
 import org.zalando.stups.fullstop.violation.entity.CountByAccountAndType;
 import org.zalando.stups.fullstop.violation.entity.CountByAppVersionAndType;
 import org.zalando.stups.fullstop.violation.entity.ViolationEntity;
@@ -20,6 +20,7 @@ import org.zalando.stups.fullstop.violation.entity.ViolationTypeEntity;
 import javax.persistence.EntityManager;
 import javax.persistence.PersistenceContext;
 import javax.transaction.Transactional;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -32,8 +33,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.joda.time.DateTime.now;
 import static org.springframework.data.domain.Sort.Direction.ASC;
 
-@RunWith(SpringJUnit4ClassRunner.class)
-@SpringApplicationConfiguration(classes = EmbeddedPostgresJpaConfig.class)
+@RunWith(SpringRunner.class)
+@SpringBootTest(classes = JpaConfig.class)
 @Transactional
 public class ViolationRepositoryTest {
 
@@ -211,5 +212,16 @@ public class ViolationRepositoryTest {
                 false,
                 false);
         assertThat(result).hasSize(1);
+    }
+
+    /**
+     * Trying to reproduce https://github.com/zalando-stups/fullstop/issues/553
+     */
+    @Test
+    public void testGetByTypes() {
+        final ArrayList<String> types = newArrayList("SOMETHING_WENT_WRONG", "YOU_SCREWED_UP");
+        final Page<ViolationEntity> result = violationRepository.queryViolations(null, null, null, null, false, null, null, null, types, false, null, null, new PageRequest(0, 2, ASC, "id"));
+        assertThat(result).isNotNull();
+        assertThat(result.getTotalElements()).isEqualTo(2);
     }
 }

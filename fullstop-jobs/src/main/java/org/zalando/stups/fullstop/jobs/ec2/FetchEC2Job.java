@@ -1,6 +1,5 @@
 package org.zalando.stups.fullstop.jobs.ec2;
 
-import com.amazonaws.AmazonServiceException;
 import com.amazonaws.services.ec2.AmazonEC2Client;
 import com.amazonaws.services.ec2.model.DescribeInstancesRequest;
 import com.amazonaws.services.ec2.model.DescribeInstancesResult;
@@ -27,8 +26,10 @@ import org.zalando.stups.fullstop.jobs.common.AwsApplications;
 import org.zalando.stups.fullstop.jobs.common.FetchTaupageYaml;
 import org.zalando.stups.fullstop.jobs.common.HttpCallResult;
 import org.zalando.stups.fullstop.jobs.common.HttpGetRootCall;
+import org.zalando.stups.fullstop.jobs.common.SecurityGroupCheckDetails;
 import org.zalando.stups.fullstop.jobs.common.SecurityGroupsChecker;
 import org.zalando.stups.fullstop.jobs.config.JobsProperties;
+import org.zalando.stups.fullstop.jobs.exception.JobExceptionHandler;
 import org.zalando.stups.fullstop.taupage.TaupageYaml;
 import org.zalando.stups.fullstop.violation.Violation;
 import org.zalando.stups.fullstop.violation.ViolationBuilder;
@@ -39,14 +40,15 @@ import javax.annotation.PostConstruct;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.ThreadPoolExecutor;
 
 import static com.amazonaws.regions.Region.getRegion;
 import static com.amazonaws.regions.Regions.fromName;
 import static com.google.common.collect.Lists.newArrayList;
 import static com.google.common.collect.Maps.newHashMap;
+import static java.util.Optional.empty;
 import static java.util.stream.Collectors.toList;
+import static org.apache.commons.lang3.StringUtils.trimToNull;
 import static org.zalando.stups.fullstop.violation.ViolationType.UNSECURED_PUBLIC_ENDPOINT;
 
 @Component
@@ -69,6 +71,7 @@ public class FetchEC2Job implements FullstopJob {
     private final ThreadPoolTaskExecutor threadPoolTaskExecutor = new ThreadPoolTaskExecutor();
 
     private final CloseableHttpClient httpClient;
+    private final JobExceptionHandler jobExceptionHandler;
 
     private final AwsApplications awsApplications;
 
@@ -88,7 +91,8 @@ public class FetchEC2Job implements FullstopJob {
                        final ViolationService violationService,
                        final FetchTaupageYaml fetchTaupageYaml,
                        final AmiDetailsProvider amiDetailsProvider,
-                       final CloseableHttpClient httpClient) {
+                       final CloseableHttpClient httpClient,
+                       final JobExceptionHandler jobExceptionHandler) {
         this.violationSink = violationSink;
         this.clientProvider = clientProvider;
         this.allAccountIds = allAccountIds;
@@ -99,6 +103,7 @@ public class FetchEC2Job implements FullstopJob {
         this.fetchTaupageYaml = fetchTaupageYaml;
         this.amiDetailsProvider = amiDetailsProvider;
         this.httpClient = httpClient;
+        this.jobExceptionHandler = jobExceptionHandler;
 
         threadPoolTaskExecutor.setCorePoolSize(12);
         threadPoolTaskExecutor.setMaxPoolSize(20);
@@ -122,88 +127,107 @@ public class FetchEC2Job implements FullstopJob {
         log.info("Running job {}", getClass().getSimpleName());
         for (final String account : allAccountIds.get()) {
             for (final String region : jobsProperties.getWhitelistedRegions()) {
-
+                final Map<String, String> accountRegionCtx = ImmutableMap.of(
+                        "job", this.getClass().getSimpleName(),
+                        "aws_account_id", account,
+                        "aws_region", region);
                 try {
-
-                    log.info("Scanning public EC2 instances for {}/{}", account, region);
-
-                    final DescribeInstancesResult describeEC2Result = getDescribeEC2Result(
+                    log.debug("Scanning public EC2 instances for {}/{}", account, region);
+                    final AmazonEC2Client ec2Client = clientProvider.getClient(
+                            AmazonEC2Client.class,
                             account,
-                            region);
-
-                    for (final Reservation reservation : describeEC2Result.getReservations()) {
-
-                        for (final Instance instance : reservation.getInstances()) {
-                            final Map<String, Object> metaData = newHashMap();
-                            metaData.putAll(amiDetailsProvider.getAmiDetails(account, getRegion(fromName(region)), instance.getImageId()));
-                            final List<String> errorMessages = newArrayList();
-                            final String instancePublicIpAddress = instance.getPublicIpAddress();
-
-                            if (violationService.violationExists(account, region, EVENT_ID, instance.getInstanceId(), UNSECURED_PUBLIC_ENDPOINT)) {
-                                continue;
-                            }
-
-                            final Set<String> unsecureGroups = securityGroupsChecker.check(
-                                    instance.getSecurityGroups().stream().map(GroupIdentifier::getGroupId).collect(toList()),
-                                    account,
-                                    getRegion(fromName(region)));
-                            if (!unsecureGroups.isEmpty()) {
-                                metaData.put("unsecuredSecurityGroups", unsecureGroups);
-                                errorMessages.add("Unsecured security group! Only ports 80 and 443 are allowed");
-                            }
-
-                            if (errorMessages.size() > 0) {
-                                metaData.put("errorMessages", errorMessages);
-                                writeViolation(account, region, metaData, instance.getInstanceId());
-
-                                // skip http response check, as we are already having a violation here
-                                continue;
-                            }
-
-                            // skip check for publicly available apps
-                            if (awsApplications.isPubliclyAccessible(account, region, newArrayList(instance.getInstanceId())).orElse(false)) {
-                                continue;
-                            }
-
-                            for (final Integer allowedPort : jobsProperties.getEc2AllowedPorts()) {
-
-                                if (allowedPort == 22) {
-                                    continue;
-                                }
-
-                                final HttpGetRootCall httpCall = new HttpGetRootCall(httpClient, instancePublicIpAddress, allowedPort);
-                                final ListenableFuture<HttpCallResult> listenableFuture = threadPoolTaskExecutor.submitListenable(
-                                        httpCall);
-                                listenableFuture.addCallback(
-                                        httpCallResult -> {
-                                            log.info("address: {} and port: {}", instancePublicIpAddress, allowedPort);
-                                            if (httpCallResult.isOpen()) {
-                                                final Map<String, Object> md = ImmutableMap.<String, Object>builder()
-                                                        .putAll(metaData)
-                                                        .put("instancePublicIpAddress", instancePublicIpAddress)
-                                                        .put("Port", allowedPort)
-                                                        .put("Error", httpCallResult.getMessage()).build();
-                                                writeViolation(account, region, md, instance.getInstanceId());
-                                            }
-                                        }, ex -> log.warn("Could not call " + instancePublicIpAddress, ex));
-
-                                log.debug("Active threads in pool: {}/{}", threadPoolTaskExecutor.getActiveCount(), threadPoolTaskExecutor.getMaxPoolSize());
-                            }
-
+                            getRegion(fromName(region)));
+                    Optional<String> nextToken = empty();
+                    do {
+                        final DescribeInstancesRequest request = new DescribeInstancesRequest();
+                        if (nextToken.isPresent()) {
+                            request.setNextToken(nextToken.get());
+                        } else {
+                            request.withFilters(
+                                    new Filter("ip-address").withValues("*"),
+                                    new Filter("instance-state-name").withValues("running"));
                         }
 
-                    }
+                        final DescribeInstancesResult result = ec2Client.describeInstances(request);
+                        nextToken = Optional.ofNullable(trimToNull(result.getNextToken()));
 
-                } catch (final AmazonServiceException a) {
+                        for (final Reservation reservation : result.getReservations()) {
+                            for (final Instance instance : reservation.getInstances()) {
+                                try {
+                                    processInstance(account, region, instance);
+                                } catch (Exception e) {
+                                    final Map<String, String> ec2Ctx = ImmutableMap.<String, String>builder()
+                                            .putAll(accountRegionCtx)
+                                            .put("ec2_instance_id", instance.getInstanceId())
+                                            .build();
+                                    jobExceptionHandler.onException(e, ec2Ctx);
+                                }
+                            }
+                        }
+                    } while (nextToken.isPresent());
 
-                    if (a.getErrorCode().equals("RequestLimitExceeded")) {
-                        log.warn("RequestLimitExceeded for account: {}", account);
-                    } else {
-                        log.error(a.getMessage(), a);
-                    }
-
+                } catch (final Exception e) {
+                    jobExceptionHandler.onException(e, accountRegionCtx);
                 }
             }
+        }
+    }
+
+    private void processInstance(String account, String region, Instance instance) {
+        final Map<String, Object> metaData = newHashMap();
+        metaData.putAll(amiDetailsProvider.getAmiDetails(account, getRegion(fromName(region)), instance.getImageId()));
+        final List<String> errorMessages = newArrayList();
+        final String instancePublicIpAddress = instance.getPublicIpAddress();
+
+        if (violationService.violationExists(account, region, EVENT_ID, instance.getInstanceId(), UNSECURED_PUBLIC_ENDPOINT)) {
+            return;
+        }
+
+        final Map<String, SecurityGroupCheckDetails> unsecureGroups = securityGroupsChecker.check(
+                instance.getSecurityGroups().stream().map(GroupIdentifier::getGroupId).collect(toList()),
+                account,
+                getRegion(fromName(region)));
+        if (!unsecureGroups.isEmpty()) {
+            metaData.put("unsecuredSecurityGroups", unsecureGroups);
+            errorMessages.add("Unsecured security group! Only ports 80 and 443 are allowed");
+        }
+
+        if (errorMessages.size() > 0) {
+            metaData.put("errorMessages", errorMessages);
+            writeViolation(account, region, metaData, instance.getInstanceId());
+
+            // skip http response check, as we are already having a violation here
+            return;
+        }
+
+        // skip check for publicly available apps
+        if (awsApplications.isPubliclyAccessible(account, region, newArrayList(instance.getInstanceId())).orElse(false)) {
+            return;
+        }
+
+        for (final Integer allowedPort : jobsProperties.getEc2AllowedPorts()) {
+
+            if (allowedPort == 22) {
+                continue;
+            }
+
+            final HttpGetRootCall httpCall = new HttpGetRootCall(httpClient, instancePublicIpAddress, allowedPort);
+            final ListenableFuture<HttpCallResult> listenableFuture = threadPoolTaskExecutor.submitListenable(
+                    httpCall);
+            listenableFuture.addCallback(
+                    httpCallResult -> {
+                        log.debug("address: {} and port: {}", instancePublicIpAddress, allowedPort);
+                        if (httpCallResult.isOpen()) {
+                            final Map<String, Object> md = ImmutableMap.<String, Object>builder()
+                                    .putAll(metaData)
+                                    .put("instancePublicIpAddress", instancePublicIpAddress)
+                                    .put("Port", allowedPort)
+                                    .put("Error", httpCallResult.getMessage()).build();
+                            writeViolation(account, region, md, instance.getInstanceId());
+                        }
+                    }, ex -> log.warn("Could not call " + instancePublicIpAddress, ex));
+
+            log.debug("Active threads in pool: {}/{}", threadPoolTaskExecutor.getActiveCount(), threadPoolTaskExecutor.getMaxPoolSize());
         }
     }
 
@@ -221,15 +245,5 @@ public class FetchEC2Job implements FullstopJob {
                 .withApplicationVersion(taupageYaml.map(TaupageYaml::getApplicationVersion).map(StringUtils::trimToNull).orElse(null))
                 .withEventId(EVENT_ID).build();
         violationSink.put(violation);
-    }
-
-    private DescribeInstancesResult getDescribeEC2Result(final String account, final String region) {
-        final AmazonEC2Client ec2Client = clientProvider.getClient(
-                AmazonEC2Client.class,
-                account,
-                getRegion(fromName(region)));
-        final DescribeInstancesRequest describeInstancesRequest = new DescribeInstancesRequest();
-        describeInstancesRequest.setFilters(newArrayList(new Filter("ip-address", newArrayList("*"))));
-        return ec2Client.describeInstances(describeInstancesRequest);
     }
 }

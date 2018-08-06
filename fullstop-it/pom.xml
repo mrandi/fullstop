@@ -4,16 +4,12 @@
     <parent>
         <groupId>org.zalando.stups</groupId>
         <artifactId>fullstop-parent</artifactId>
-        <version>13</version>
-        <relativePath/>
+        <version>1.3.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>fullstop-it</artifactId>
-    <version>1.2.0-SNAPSHOT</version>
-    <packaging>jar</packaging>
 
     <properties>
-        <active-profiles>integration-test</active-profiles>
         <maven.install.skip>true</maven.install.skip>
         <maven.deploy.skip>true</maven.deploy.skip>
     </properties>
@@ -22,12 +18,18 @@
         <dependency>
             <groupId>org.zalando.stups</groupId>
             <artifactId>fullstop</artifactId>
-            <version>1.2.0-SNAPSHOT</version>
+            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.zalando.stups</groupId>
             <artifactId>fullstop-logging</artifactId>
-            <version>1.2.0-SNAPSHOT</version>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
         </dependency>
 
         <dependency>
@@ -54,24 +56,12 @@
                         </executions>
                         <configuration>
                             <systemPropertyVariables>
-                                <spring.profiles.active>${active-profiles}</spring.profiles.active>
+                                <spring.profiles.active>integration-test</spring.profiles.active>
                             </systemPropertyVariables>
                         </configuration>
                     </plugin>
                 </plugins>
             </build>
-        </profile>
-        <profile>
-            <id>pg-travis</id>
-            <properties>
-                <active-profiles>integration-test,travis</active-profiles>
-            </properties>
-        </profile>
-        <profile>
-            <id>gocd</id>
-            <properties>
-                <active-profiles>integration-test,gocd</active-profiles>
-            </properties>
         </profile>
     </profiles>
 </project>

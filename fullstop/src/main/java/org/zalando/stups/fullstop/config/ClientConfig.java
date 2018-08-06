@@ -2,15 +2,13 @@ package org.zalando.stups.fullstop.config;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.client.ResponseErrorHandler;
 import org.springframework.web.client.RestOperations;
 import org.springframework.web.client.RestTemplate;
-import org.zalando.kontrolletti.HystrixKontrollettiOperations;
-import org.zalando.kontrolletti.KontrollettiOperations;
-import org.zalando.kontrolletti.RestTemplateKontrollettiOperations;
 import org.zalando.stups.clients.kio.KioOperations;
 import org.zalando.stups.clients.kio.spring.KioClientResponseErrorHandler;
 import org.zalando.stups.clients.kio.spring.RestTemplateKioOperations;
@@ -18,6 +16,7 @@ import org.zalando.stups.fullstop.hystrix.HystrixKioOperations;
 import org.zalando.stups.fullstop.hystrix.HystrixTeamOperations;
 import org.zalando.stups.fullstop.teams.RestTemplateTeamOperations;
 import org.zalando.stups.fullstop.teams.TeamOperations;
+import org.zalando.stups.fullstop.teams.TeamServiceProperties;
 import org.zalando.stups.oauth2.spring.client.StupsOAuth2RestTemplate;
 import org.zalando.stups.oauth2.spring.client.StupsTokensAccessTokenProvider;
 import org.zalando.stups.pierone.client.HystrixSpringPieroneOperations;
@@ -33,22 +32,32 @@ import java.util.stream.Stream;
 import static java.util.stream.Collectors.toMap;
 
 @Configuration
+@EnableConfigurationProperties(TeamServiceProperties.class)
 public class ClientConfig {
 
+    private final AccessTokens accessTokens;
+
+    private final TeamServiceProperties teamServiceProperties;
+
+    private final String kioBaseUrl;
+
+    private final String teamServiceBaseUrl;
+
+    private final String pieroneUrls;
+
     @Autowired
-    private AccessTokens accessTokens;
-
-    @Value("${fullstop.clients.kio.url}")
-    private String kioBaseUrl;
-
-    @Value("${fullstop.clients.teamService.url}")
-    private String teamServiceBaseUrl;
-
-    @Value("${fullstop.clients.kontrolletti.url}")
-    private String kontrollettiBaseUrl;
-
-    @Value("${fullstop.clients.pierone.urls}")
-    private String pieroneUrls;
+    public ClientConfig(
+            AccessTokens accessTokens,
+            TeamServiceProperties teamServiceProperties,
+            @Value("${fullstop.clients.kio.url}") String kioBaseUrl,
+            @Value("${fullstop.clients.teamService.url}") String teamServiceBaseUrl,
+            @Value("${fullstop.clients.pierone.urls}") String pieroneUrls) {
+        this.accessTokens = accessTokens;
+        this.teamServiceProperties = teamServiceProperties;
+        this.kioBaseUrl = kioBaseUrl;
+        this.teamServiceBaseUrl = teamServiceBaseUrl;
+        this.pieroneUrls = pieroneUrls;
+    }
 
     @Bean
     public KioOperations kioOperations() {
@@ -63,15 +72,7 @@ public class ClientConfig {
         return new HystrixTeamOperations(
                 new RestTemplateTeamOperations(
                         buildOAuth2RestTemplate("teamService"),
-                        teamServiceBaseUrl));
-    }
-
-    @Bean
-    public KontrollettiOperations kontrollettiOperations() {
-        return new HystrixKontrollettiOperations(
-                new RestTemplateKontrollettiOperations(
-                        buildOAuth2RestTemplate("kontrolletti"),
-                        kontrollettiBaseUrl));
+                        teamServiceBaseUrl, teamServiceProperties));
     }
 
     @Bean

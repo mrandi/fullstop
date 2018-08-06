@@ -2,8 +2,12 @@ package org.zalando.stups.fullstop.teams;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableMap;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestOperations;
 
@@ -11,6 +15,7 @@ import java.net.URI;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import static java.util.stream.Collectors.toList;
 import static java.util.stream.Collectors.toSet;
@@ -34,22 +39,33 @@ public class RestTemplateTeamOperations implements TeamOperations {
 
     private final String baseUrl;
 
-    public RestTemplateTeamOperations(final RestOperations restOperations, final String baseUrl) {
+    private final TeamServiceProperties teamServiceProperties;
+
+    public RestTemplateTeamOperations(final RestOperations restOperations,
+                                      final String baseUrl,
+                                      final TeamServiceProperties teamServiceProperties) {
         this.restOperations = restOperations;
         this.baseUrl = baseUrl;
+        this.teamServiceProperties = teamServiceProperties;
     }
 
     @Override
+    @Cacheable(cacheNames = "aws-accounts-by-user", cacheManager = "oneMinuteTTLCacheManager")
     public List<Account> getAwsAccountsByUser(final String userId) {
-        Preconditions.checkArgument(StringUtils.hasText(userId), "userId must not be blank");
+        Assert.hasText(userId, "userId must not be blank");
+        final String url = baseUrl + "/api/accounts/aws?member={member}&role={role}";
 
-        final ResponseEntity<List<Account>> response = restOperations.exchange(
-                get(URI.create(baseUrl + "/api/accounts/aws?member=" + userId)).build(), userTeamListType);
-        Preconditions.checkState(response.getStatusCode().is2xxSuccessful(), "getAwsAccountsByUser failed: %s", response);
-        return response.getBody();
+        return Stream.of(teamServiceProperties.getAwsMembershipRolesAsArray())
+                .parallel()
+                .map(role -> ImmutableMap.of("role", role, "member", userId))
+                .map(queryParams -> restOperations.exchange(url, HttpMethod.GET, null, userTeamListType, queryParams))
+                .flatMap(response -> response.getBody().stream())
+                .distinct()
+                .collect(toList());
     }
 
     @Override
+    @Cacheable(cacheNames = "team-ids-by-user", cacheManager = "oneMinuteTTLCacheManager")
     public Set<String> getTeamIdsByUser(final String userId) {
         Preconditions.checkArgument(StringUtils.hasText(userId), "userId must not be blank");
 
@@ -68,6 +84,7 @@ public class RestTemplateTeamOperations implements TeamOperations {
     }
 
     @Override
+    @Cacheable(cacheNames = "active-aws-accounts", cacheManager = "oneMinuteTTLCacheManager")
     public List<Account> getActiveAccounts() {
         final ResponseEntity<List<Account>> response = restOperations.exchange(
                 get(URI.create(baseUrl + "/api/accounts/aws")).build(), accountType);
